@@ -15,6 +15,7 @@ DB_PATH = Path(__file__).with_name("ldbc_snb_sf1.lbdb")
 def connection():
     db = lb.Database(str(DB_PATH))
     conn = lb.Connection(db)
+    conn.execute("ANALYZE")
     yield conn
 
 

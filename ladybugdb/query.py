@@ -11,6 +11,7 @@ def _execute(conn: Connection, idx: int, query: str):
     response = conn.execute(query)
     result = response.get_as_pl()  # type: ignore
     print(result)
+    response.close()
     return result
 
 
@@ -409,5 +410,6 @@ if __name__ == "__main__":
     DB_NAME = "ldbc_snb_sf1.lbdb"
     db = lb.Database(f"./{DB_NAME}")
     conn = lb.Connection(db)
+    conn.execute("ANALYZE")
     selected_queries = _parse_selection(sys.argv[1:])
     main(conn, selected_queries)
