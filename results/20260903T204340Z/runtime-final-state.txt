@@ -1,0 +1,2 @@
+PROFILE           STATUS     ARCH       CPUS    MEMORY    DISK      RUNTIME    ADDRESS
+ldbc-benchmark    Stopped    aarch64    4       10GiB     100GiB    docker     

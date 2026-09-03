@@ -137,7 +137,12 @@ def run_query11(conn: Connection):
         ORDER BY num_e DESC
         LIMIT 1;
     """
-    return _execute(conn, 11, query)
+    # Work around https://github.com/LadybugDB/ladybug/issues/906 for Q11 only.
+    _execute(conn, 11, "CALL enable_cached_prepared_statement='none';")
+    try:
+        return _execute(conn, 11, query)
+    finally:
+        _execute(conn, 11, "CALL enable_cached_prepared_statement='both';")
 
 
 def run_query12(conn: Connection):

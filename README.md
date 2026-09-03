@@ -93,39 +93,68 @@ each of the 30 queries run in the benchmark.
 
 ## High-level results
 
-| Query | neo4j-2025.12.1 (ms) | kuzu-0.11.3 (ms) | ladybug-0.15.3 (ms) | lance-graph-0.5.4 (ms) |
-| --- | --- | --- | --- | --- |
-| q1 | 4.9ms | 2.3ms (2.2x) | 3.4ms (1.4x) | 2.3ms (2.1x) |
-| q2 | 5.9ms | 1.4ms (4.1x) | 2.3ms (2.6x) | 3.3ms (1.8x) |
-| q3 | 2.9ms | 1.2ms (2.4x) | 2.0ms (1.5x) | 3.1ms (0.9x) |
-| q4 | 4.1ms | 1.0ms (4.0x) | 1.6ms (2.5x) | 4.2ms (1.0x) |
-| q5 | 4.9ms | 3.8ms (1.3x) | 5.9ms (0.8x) | 3.0ms (1.6x) |
-| q6 | 3.9ms | 0.8ms (5.0x) | 1.4ms (2.8x) | 1.3ms (2.9x) |
-| q7 | 2.2ms | 31.1ms (0.1x) | 50.1ms (0.0x) | 19.1ms (0.1x) |
-| q8 | 14.6ms | 2.9ms (5.1x) | 4.5ms (3.2x) | 2.0ms (7.4x) |
-| q9 | 2.8ms | 2.1ms (1.4x) | 3.5ms (0.8x) | 3.4ms (0.8x) |
-| q10 | 4.9ms | 1.8ms (2.7x) | 3.1ms (1.6x) | 32.3ms (0.2x) |
-| q11 | 14.9ms | 8.5ms (1.8x) | 13.6ms (1.1x) | 5.1ms (2.9x) |
-| q12 | 8.1ms | 20.7ms (0.4x) | 23.9ms (0.3x) | 22.2ms (0.4x) |
-| q13 | 9.9ms | 50.8ms (0.2x) | 82.8ms (0.1x) | 11.5ms (0.9x) |
-| q14 | 1.7ms | 1.7ms (1.0x) | 2.8ms (0.6x) | 4.0ms (0.4x) |
-| q15 | 3.3ms | 2.7ms (1.2x) | 4.4ms (0.7x) | 3.5ms (0.9x) |
-| q16 | 2.4ms | 2.0ms (1.2x) | 3.2ms (0.7x) | 5.7ms (0.4x) |
-| q17 | 4.9ms | 3.0ms (1.6x) | 4.8ms (1.0x) | 3.8ms (1.3x) |
-| q18 | 3.7ms | 1.8ms (2.0x) | 2.8ms (1.3x) | 3.0ms (1.2x) |
-| q19 | 7.8ms | 12.4ms (0.6x) | 22.5ms (0.3x) | 25.8ms (0.3x) |
-| q20 | 475.7ms | 11.9ms (39.9x) | 17.0ms (28.0x) | 3.6ms (133.5x) |
-| q21 | 1.8ms | 0.6ms (3.2x) | 0.9ms (2.1x) | 2.6ms (0.7x) |
-| q22 | 3.6ms | 24.2ms (0.2x) | 26.6ms (0.1x) | 16.7ms (0.2x) |
-| q23 | 3.9ms | 1.4ms (2.8x) | 2.3ms (1.7x) | 3.9ms (1.0x) |
-| q24 | 1.6ms | 1.5ms (1.1x) | 2.4ms (0.7x) | 2.9ms (0.6x) |
-| q25 | 3.1ms | 1.8ms (1.7x) | 2.9ms (1.1x) | 2.4ms (1.3x) |
-| q26 | 1.8ms | 3.7ms (0.5x) | 5.9ms (0.3x) | 4.5ms (0.4x) |
-| q27 | 3.5ms | 15.2ms (0.2x) | 24.0ms (0.1x) | 32.3ms (0.1x) |
-| q28 | 3.9ms | 1.7ms (2.3x) | 3.5ms (1.1x) | 4.2ms (0.9x) |
-| q29 | 2.9ms | 1.3ms (2.3x) | 2.3ms (1.2x) | 3.7ms (0.8x) |
-| q30 | 1255.2ms | 158.7ms (7.9x) | 231.9ms (5.4x) | 38.8ms (32.3x) |
+Latest measurements: **2026-09-03**, on an Apple M5 with 10 logical CPUs and 24 GiB RAM, running macOS 26.6.2 and Python 3.13.14. Each engine has a completed 30-query suite, with all assertions passing and at least five measured rounds per query.
 
-The fastest and slowest systems for each query can be visualized via the following heatmap.
+Ladybug **0.20.2** was rerun on `main` after [PR #13](https://github.com/prrao87/graph-benchmark-ldbc/pull/13) was merged. Q11 temporarily disables prepared-statement caching and restores it afterward, following [Ladybug issue #906](https://github.com/LadybugDB/ladybug/issues/906). Its timing includes both cache-setting calls. All other Ladybug queries retain caching; `ANALYZE`, result cleanup and main's six ART secondary indexes remain enabled. [Follow-up #16](https://github.com/prrao87/graph-benchmark-ldbc/issues/16) tracks removing this workaround once the upstream fix is available.
 
-![](./results/benchmark_heatmap.png)
+Kuzu, Lance Graph and Neo4j values are from the earlier full-suite runs on the same machine; their query, benchmark and ingestion sources are unchanged on main. Neo4j ran in a native-arm64 Colima VM with 4 CPUs and 10 GiB RAM, using the existing heap/page-cache settings. Embedded engines ran natively with the VM stopped. These compare the stated deployment configurations, not equal resource limits or controlled cold caches.
+
+[Run summary and raw JSON](results/20260903T210653Z/summary.md) · [Run notes](results/20260903T210653Z/run-notes.md)
+
+### Benchmark settings
+
+Run from each engine directory:
+
+```sh
+uv run --frozen pytest benchmark_query.py \
+  --benchmark-min-rounds=5 \
+  --benchmark-min-time=0.000005 \
+  --benchmark-max-time=1.0 \
+  --benchmark-timer=time.perf_counter \
+  --benchmark-calibration-precision=10 \
+  --benchmark-warmup=off \
+  --benchmark-warmup-iterations=5 \
+  --benchmark-disable-gc \
+  --benchmark-sort=fullname
+```
+
+The runs use pytest-benchmark 5.2.3. Five rounds is a minimum, not an exact count. Query result conversion and printing remain inside the timed functions; calibration is enabled and warmup is disabled. All four graphs were verified to contain 3,181,724 nodes and 17,256,038 relationships, with expected indexes ready before timing.
+
+### Mean query latency
+
+Times are in milliseconds. Parenthesized ratios are Neo4j mean / engine mean; values above 1 indicate faster execution than this Neo4j setup.
+
+| Query | neo4j-2025.12.1 (ms) | kuzu-0.11.3 (ms) | ladybug-0.20.2 (ms) | lance-graph-0.5.4 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| q1 | 4.098 | 1.716 (2.39x) | 1.240 (3.30x) | 1.281 (3.20x) |
+| q2 | 5.082 | 1.313 (3.87x) | 0.591 (8.59x) | 2.266 (2.24x) |
+| q3 | 2.018 | 1.023 (1.97x) | 0.820 (2.46x) | 1.840 (1.10x) |
+| q4 | 3.141 | 0.855 (3.67x) | 0.213 (14.78x) | 2.912 (1.08x) |
+| q5 | 4.244 | 3.419 (1.24x) | 3.300 (1.29x) | 1.986 (2.14x) |
+| q6 | 3.145 | 0.705 (4.46x) | 0.537 (5.85x) | 0.706 (4.46x) |
+| q7 | 1.508 | 27.588 (0.05x) | 27.028 (0.06x) | 15.430 (0.10x) |
+| q8 | 11.720 | 2.651 (4.42x) | 2.380 (4.93x) | 1.139 (10.29x) |
+| q9 | 1.782 | 1.712 (1.04x) | 0.631 (2.82x) | 1.878 (0.95x) |
+| q10 | 3.514 | 1.511 (2.33x) | 21.157 (0.17x) | 27.044 (0.13x) |
+| q11 | 10.935 | 7.735 (1.41x) | 7.854 (1.39x) | 3.043 (3.59x) |
+| q12 | 3.888 | 17.120 (0.23x) | 25.097 (0.15x) | 18.705 (0.21x) |
+| q13 | 8.398 | 42.157 (0.20x) | 41.832 (0.20x) | 9.465 (0.89x) |
+| q14 | 1.288 | 1.464 (0.88x) | 1.697 (0.76x) | 2.432 (0.53x) |
+| q15 | 2.603 | 2.299 (1.13x) | 2.377 (1.09x) | 2.114 (1.23x) |
+| q16 | 1.418 | 1.735 (0.82x) | 3.943 (0.36x) | 3.910 (0.36x) |
+| q17 | 3.119 | 2.553 (1.22x) | 2.453 (1.27x) | 2.220 (1.41x) |
+| q18 | 2.739 | 1.441 (1.90x) | 0.999 (2.74x) | 1.741 (1.57x) |
+| q19 | 5.189 | 13.232 (0.39x) | 11.623 (0.45x) | 19.478 (0.27x) |
+| q20 | 393.291 | 13.666 (28.78x) | 13.172 (29.86x) | 2.828 (139.05x) |
+| q21 | 1.336 | 0.445 (3.00x) | 0.324 (4.12x) | 1.456 (0.92x) |
+| q22 | 2.618 | 21.507 (0.12x) | 19.023 (0.14x) | 13.224 (0.20x) |
+| q23 | 3.081 | 1.151 (2.68x) | 0.387 (7.97x) | 2.510 (1.23x) |
+| q24 | 1.291 | 1.191 (1.08x) | 0.546 (2.37x) | 1.706 (0.76x) |
+| q25 | 2.579 | 1.388 (1.86x) | 0.685 (3.77x) | 1.308 (1.97x) |
+| q26 | 1.222 | 3.280 (0.37x) | 2.738 (0.45x) | 3.014 (0.41x) |
+| q27 | 2.518 | 14.305 (0.18x) | 15.408 (0.16x) | 24.665 (0.10x) |
+| q28 | 3.033 | 1.457 (2.08x) | 1.183 (2.56x) | 2.547 (1.19x) |
+| q29 | 2.359 | 0.965 (2.45x) | 0.418 (5.65x) | 2.645 (0.89x) |
+| q30 | 1055.151 | 153.493 (6.87x) | 354.873 (2.97x) | 35.090 (30.07x) |
+
+Latest CLI outputs: [Neo4j](results/neo4j-2025.12.1.txt), [Kuzu](results/kuzu-0.11.3.txt), [Ladybug 0.20.2](results/ladybug-0.20.2.txt), [Lance Graph](results/lance-graph-0.5.4.txt).
