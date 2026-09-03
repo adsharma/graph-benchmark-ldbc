@@ -8,9 +8,12 @@ from ladybug import Connection
 
 def _execute(conn: Connection, idx: int, query: str):
     print(f"\nQuery {idx}:\n{query}")
-    response = conn.execute(query)
+    # without the dummy parameter the engine doesn't cache the plan
+    # alternative: use prepare() and execute()
+    response = conn.execute(query, {"dummy": 0})
     result = response.get_as_pl()  # type: ignore
     print(result)
+    response.close()
     return result
 
 
@@ -409,5 +412,6 @@ if __name__ == "__main__":
     DB_NAME = "ldbc_snb_sf1.lbdb"
     db = lb.Database(f"./{DB_NAME}")
     conn = lb.Connection(db)
+    conn.execute("ANALYZE")
     selected_queries = _parse_selection(sys.argv[1:])
     main(conn, selected_queries)
