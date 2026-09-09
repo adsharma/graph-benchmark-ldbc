@@ -2,102 +2,82 @@
 
 Faithful port of::
 
-    /home/ubuntu/src/ldbc_snb_interactive_v1_impls/cypher/queries/
+    /data/ldbc_snb_interactive_v1_impls/cypher/queries/
         interactive-complex-{1..14}.cypher
 
-to the Ladybug schema of ``ldbc_snb_sf1.lbdb`` (from ``:schema`` in
-``~/bin/lbug -r ldbc*.lbdb``). Structure mirrors ``query.py``.
+to the Ladybug schema of ``ldbc_snb_sf1.lbdb``. Each query is ONE Cypher
+statement with the official clause structure (same MATCH / OPTIONAL MATCH /
+WITH / aggregation / ORDER BY / LIMIT shape). Only the following adaptations
+are applied:
 
-----------------------------------------------------------------------
-Schema mapping (official openCypher label -> Ladybug label)
-----------------------------------------------------------------------
+Schema adaptations (data-model differences, unavoidable):
 - ``Person.id`` -> ``Person.ID``; ``KNOWS`` -> ``knows`` (stored directed,
   hence traversed undirected ``-[:knows]-`` everywhere).
-- ``Message`` (Post|Comment superclass) -> separate ``Post``/``Comment``
-  branches combined with ``UNION ALL``.
+- ``Message`` (Post|Comment superclass) -> ``Post``/``Comment`` branches
+  combined with ``UNION ALL`` (Q2/Q8/Q9), or two ``OPTIONAL MATCH`` branches
+  where a post-``UNION`` aggregation is required (Q3) or a post-``UNION``
+  ``WITH`` (head-per-group) is required (Q7), since Ladybug parses
+  ``UNION ALL`` followed only by ``ORDER BY``/``SKIP``/``LIMIT``.
 - ``HAS_CREATOR`` -> ``postHasCreator`` / ``commentHasCreator``.
 - ``REPLY_OF`` -> ``replyOfPost`` / ``replyOfComment``.
-- ``LIKES`` (with ``like.creationDate``) -> ``likePost`` / ``likeComment``
-  (both carry ``creationDate``).
+- ``LIKES`` (with ``like.creationDate``) -> ``likePost`` / ``likeComment``.
 - ``HAS_TAG`` -> ``postHasTag`` / ``commentHasTag``; ``HAS_TYPE`` -> ``hasType``;
-  ``IS_SUBCLASS_OF`` -> ``isSubclassOf``.
+  ``IS_SUBCLASS_OF`` -> ``isSubclassOf``; ``TagClass`` -> ``Tagclass``.
 - ``IS_LOCATED_IN`` -> ``personIsLocatedIn`` / ``postIsLocatedIn`` /
   ``commentIsLocatedIn`` / ``organisationIsLocatedIn``.
-- ``IS_PART_OF`` -> ``isPartOf``; ``STUDY_AT`` (``classYear``) -> ``studyAt``;
-  ``WORK_AT`` (``workFrom`` year) -> ``workAt``; ``HAS_MEMBER`` (``joinDate``)
-  -> ``hasMember``; ``CONTAINER_OF`` (Forum->Post) -> ``containerOf``;
-  ``HAS_INTEREST`` -> ``hasInterest``.
-- Official ``City``/``Country`` (resp. ``University``/``Company``) node labels
-  -> Ladybug ``Place.type`` (``city``/``country``), ``Organisation.type``
-  (``university``/``company``) discriminators.
-- Official epoch-millis date params -> ``"YYYY-MM-DD HH:MM:SS"`` strings bound
-  via ``TIMESTAMP($param)``.
-- Unavailable in this snapshot (omitted, noted per query): ``Person.email``,
-  ``Person.speaks`` (Q1); ``horoscopeSign`` is expressed officially as a
-  birthday month/day zodiac predicate on ``$month`` (Q10).
+- ``IS_PART_OF`` -> ``isPartOf``; ``STUDY_AT`` -> ``studyAt``;
+  ``WORK_AT`` -> ``workAt``; ``HAS_MEMBER`` -> ``hasMember``;
+  ``CONTAINER_OF`` -> ``containerOf``; ``HAS_INTEREST`` -> ``hasInterest``.
+- ``City``/``Country``/``Company``/``University`` labels -> ``Place.type``
+  (``city``/``country``) / ``Organisation.type`` (``university``/``company``)
+  inline label emulation (verified no-ops on this snapshot).
+- Epoch-millis date params -> ``"YYYY-MM-DD HH:MM:SS"`` strings bound via
+  ``TIMESTAMP($param)``.
+- ``Person.email`` / ``Person.speaks`` do not exist in this snapshot, so Q1
+  omits ``friendEmails``/``friendLanguages``; the ``[name, year, place]``
+  university/company lists are returned as structs (Ladybug lists must be
+  homogeneous), with the official ``CASE ... WHEN null`` null-row shape kept.
+- ``Comment`` has no ``imageFile`` property, so Q7 resolves the message text
+  per kind before the unified pipeline (``COALESCE(content, imageFile)`` for
+  posts, ``content`` for comments); comments always carry content here.
 
-----------------------------------------------------------------------
-PARAMETERS (highlighted)
-----------------------------------------------------------------------
-Every query is parameterized with ``$name`` placeholders matching the official
-query's parameter names. Each ``run_queryN`` lists its parameters in its
-docstring, binds them from the ``PARAMS`` table below (overridable via keyword
-arguments), and prints the bound values before executing, e.g.::
+Dialect adaptations (Ladybug openCypher subset, same clause shape):
+- D1 ``shortestPath()`` function -> ``* SHORTEST`` pattern quantifier.
+- D2 ``datetime({epochMillis: ...})`` -> ``date_part()`` on the ``DATE``
+  ``birthday`` (same zodiac predicate on ``$month``).
+- D3 ``head(collect(...))`` -> ordered ``WITH ... LIMIT 1e9`` +
+  ``COLLECT(...)[1]`` (1-based indexing; ``HEAD()`` does not exist).
+- D4 list comprehension ``size([p IN posts WHERE ...])`` -> ``UNWIND`` +
+  ``OPTIONAL MATCH`` + ``COUNT(DISTINCT CASE WHEN ...)`` in the same single
+  statement (list comprehensions do not exist).
+- D5 ``allShortestPaths()`` / ``reduce()`` do not exist -> Q14 runs two
+  statements: (1) shortest length via ``OPTIONAL MATCH ... SHORTEST`` +
+  ``CASE WHEN ... IS NULL`` (official null shape kept); (2) ONE
+  enumeration-plus-weighting statement (unrolled L-hop chain, per-edge reply
+  counts via ``COUNT(DISTINCT ...)`` inside the DB, no per-edge round trips).
+- D6 ``WITH ... ORDER BY`` requires a ``LIMIT`` -> ``LIMIT 1000000000``
+  (no-op) where the official query orders without limiting.
+- D7 ``CASE path IS NULL`` -> ``OPTIONAL MATCH`` + ``CASE WHEN e IS NULL``.
 
-    uv run query_complex14.py "1,2"        # run Q1 and Q2 with defaults
-    uv run query_complex14.py              # run all 14 queries
-
-    # override from Python:
-    #   run_query1(conn, personId=2783, firstName="Yang")
-
-Official example person IDs (e.g. 4398046511333, 6597069766734) do NOT exist
-in this SF1 snapshot (only 143 does), so person defaults use verified members
-(Samir = highest degree; Rafael = his direct friend; 143 for Q8). Tag, country,
-tag-class and date-window defaults follow the official examples wherever they
-yield results here.
-
-================= ============================================================
-Query           Parameters (all have working defaults in PARAMS)
-================= ============================================================
-Q1              $personId, $firstName
-Q2              $personId, $maxDate
-Q3              $personId, $countryXName, $countryYName, $startDate, $endDate
-                  (+ optional $durationDays to derive $endDate)
-Q4              $personId, $startDate, $endDate
-Q5              $personId, $minDate
-Q6              $personId, $tagName
-Q7              $personId
-Q8              $personId
-Q9              $personId, $maxDate
-Q10             $personId, $month
-Q11             $personId, $countryName, $workFromYear
-Q12             $personId, $tagClassName
-Q13             $person1Id, $person2Id  (-1 when disconnected)
-Q14             $person1Id, $person2Id
-================= ============================================================
+Parameters reuse the ``PARAMS`` table (official examples wherever they yield
+results in SF1; official person IDs other than 143 do not exist here, so
+verified members are used: Samir = highest degree; Rafael = his direct
+friend).
 """
 
 import sys
 import time
-from datetime import datetime, timedelta
 from typing import Any, Callable
 
 import ladybug as lb
 from ladybug import Connection
 
-# ---------------------------------------------------------------------------
-# Default parameter values. Persons verified in SF1 via lbug; tag/country/
-# class/date defaults follow the official query examples where non-empty.
-# ---------------------------------------------------------------------------
 SAMIR = 2199023262543  # Samir Al-Fayez: highest-degree person (814 friends)
 RAFAEL = 2783  # Rafael Alonso, a direct friend of Samir
 
 PARAMS: dict[int, dict[str, Any]] = {
-    # official ex.: 4398046511333 / "Jose" (person missing here; 85 Joses near Samir)
     1: {"personId": SAMIR, "firstName": "Jose"},
-    # official ex.: 10995116278009 (missing here), maxDate 1287230400000 = 2010-10-16 12:00:00
     2: {"personId": SAMIR, "maxDate": "2010-10-16 12:00:00"},
-    # official ex.: 6597069766734 (missing here); Angola/Colombia kept, June-2010 window kept
     3: {
         "personId": SAMIR,
         "countryXName": "Angola",
@@ -106,35 +86,22 @@ PARAMS: dict[int, dict[str, Any]] = {
         "endDate": "2010-06-29 12:00:00",
         "durationDays": None,
     },
-    # official ex.: 4398046511333 (missing here); window 1275350400000..1277856000000
     4: {"personId": SAMIR, "startDate": "2010-06-01 00:00:00", "endDate": "2010-06-30 00:00:00"},
-    # official ex.: 6597069766734 (missing here); minDate 1288612800000 = 2010-11-01 12:00:00
     5: {"personId": SAMIR, "minDate": "2010-11-01 12:00:00"},
-    # official ex.: 4398046511333 (missing here) / "Carl_Gustaf_Emil_Mannerheim" (kept)
     6: {"personId": SAMIR, "tagName": "Carl_Gustaf_Emil_Mannerheim"},
-    # official ex.: 4398046511268 (missing here)
     7: {"personId": SAMIR},
-    # official ex.: 143 (exists: Maria Alkaios)
     8: {"personId": 143},
-    # official ex.: 4398046511268 (missing here), maxDate 1289908800000 = 2010-11-16 12:00:00
     9: {"personId": SAMIR, "maxDate": "2010-11-16 12:00:00"},
-    # official ex.: 4398046511333 (missing here), month 5 (kept)
     10: {"personId": SAMIR, "month": 5},
-    # official ex.: 10995116277918 (missing here); Hungary / 2011 kept
     11: {"personId": SAMIR, "countryName": "Hungary", "workFromYear": 2011},
-    # official ex.: 10995116278009 (missing here); "Monarch" kept
     12: {"personId": SAMIR, "tagClassName": "Monarch"},
-    # official ex.: 8796093022390 / 8796093022357 (both missing here)
     13: {"person1Id": SAMIR, "person2Id": RAFAEL},
-    # official ex.: 8796093022357 / 8796093022390 (both missing here)
     14: {"person1Id": SAMIR, "person2Id": RAFAEL},
 }
 
 
 def _execute(conn: Connection, idx: int, query: str, params: dict[str, Any] | None = None):
     bound = dict(params or {})
-    # without a parameter the engine doesn't cache the plan (cf. query.py);
-    # keep one dummy entry so plan caching stays enabled.
     bound.setdefault("dummy", 0)
     print(f"\nQuery {idx}  parameters: " + ", ".join(f"${k}={v!r}" for k, v in bound.items() if k != "dummy"))
     print(f"Query {idx}:\n{query}")
@@ -146,43 +113,12 @@ def _execute(conn: Connection, idx: int, query: str, params: dict[str, Any] | No
 
 
 def _get(conn: Connection, query: str, params: dict[str, Any]):
-    """Lightweight fetch (list of rows) for internal helpers (Q3/Q7/Q14)."""
+    """Lightweight fetch (list of rows) for the Q14 length probe."""
     response = conn.execute(query, params)
     try:
         return response.get_all()
     finally:
         response.close()
-
-
-def _execute_union_top(
-    conn: Connection,
-    idx: int,
-    query: str,
-    params: dict[str, Any],
-    sort_by: list[str],
-    descending: list[bool],
-    limit: int,
-):
-    """UNION ALL branch-merge with client-side ORDER BY + LIMIT.
-
-    NOTE: Ladybug currently ignores a trailing ORDER BY/LIMIT over a
-    UNION ALL (it returns the unsorted, un-truncated union), so the union
-    is fetched whole and the top-N is selected here with polars. The
-    printed Cypher shows the intended ordering as a comment.
-    """
-    import polars as pl
-
-    bound = dict(params or {})
-    bound.setdefault("dummy", 0)
-    print(f"\nQuery {idx}  parameters: " + ", ".join(f"${k}={v!r}" for k, v in bound.items() if k != "dummy"))
-    print(f"Query {idx}:\n{query}")
-    response = conn.execute(query, bound)
-    df = response.get_as_pl()
-    response.close()
-    assert isinstance(df, pl.DataFrame)
-    top = df.sort(sort_by, descending=descending).head(limit)
-    print(top)
-    return top
 
 
 # ---------------------------------------------------------------------------
@@ -191,17 +127,8 @@ def _execute_union_top(
 def run_query1(conn: Connection, personId: int | None = None, firstName: str | None = None):
     """Q1. Transitive (1-3 hop) friends of $personId named $firstName.
 
-    Parameters:
-        $personId  -- start Person ID.
-        $firstName -- given first name to match.
-    Ordered by distance ASC, last name ASC, friend ID ASC. LIMIT 20.
-    Includes home city, universities [{name, classYear, city}] and companies
-    [{name, workFrom, country}] as structs.
-
-    Diffs vs official: ``friendEmails``/``friendLanguages`` omitted (no
-    ``email``/``speaks`` properties in this snapshot); unmatched uni/company
-    collect as a null-field struct instead of official ``[null]`` (Ladybug
-    lists must be homogeneous); company place may be a city, not a Country.
+    Official shape: cartesian (person, friend) + shortestPath + min(length),
+    then MATCH city + 2x OPTIONAL MATCH (uni/company) + RETURN, ORDER BY/LIMIT.
     """
     p = PARAMS[1].copy()
     if personId is not None:
@@ -209,22 +136,26 @@ def run_query1(conn: Connection, personId: int | None = None, firstName: str | N
     if firstName is not None:
         p["firstName"] = firstName
     query = """
-        MATCH (start:Person {ID: $personId})-[e:knows* SHORTEST 1..3]-(friend:Person)
-        WHERE friend.firstName = $firstName AND friend.ID <> $personId
-        WITH friend, LENGTH(e) AS distance
+        MATCH (p:Person {ID: $personId}), (friend:Person {firstName: $firstName})
+        WHERE p.ID <> friend.ID
+        WITH p, friend
+        MATCH (p)-[path:knows* SHORTEST 1..3]-(friend)
+        WITH MIN(LENGTH(path)) AS distance, friend
         ORDER BY distance ASC, friend.lastName ASC, friend.ID ASC
         LIMIT 20
-        MATCH (friend)-[:personIsLocatedIn]->(friendCity:Place)
-        OPTIONAL MATCH (friend)-[studyAt:studyAt]->(uni:Organisation)
-                           -[:organisationIsLocatedIn]->(uniCity:Place)
+        MATCH (friend)-[:personIsLocatedIn]->(friendCity:Place {type: 'city'})
+        OPTIONAL MATCH (friend)-[studyAt:studyAt]->(uni:Organisation {type: 'university'})
+                           -[:organisationIsLocatedIn]->(uniCity:Place {type: 'city'})
         WITH friend, friendCity, distance,
-             COLLECT(DISTINCT {universityName: uni.name, classYear: studyAt.classYear,
-                               cityName: uniCity.name}) AS unis
-        OPTIONAL MATCH (friend)-[workAt:workAt]->(company:Organisation)
-                           -[:organisationIsLocatedIn]->(companyPlace:Place)
+             COLLECT(CASE WHEN uni IS NULL THEN NULL
+                          ELSE {universityName: uni.name, classYear: studyAt.classYear,
+                                cityName: uniCity.name} END) AS unis
+        OPTIONAL MATCH (friend)-[workAt:workAt]->(company:Organisation {type: 'company'})
+                           -[:organisationIsLocatedIn]->(companyCountry:Place {type: 'country'})
         WITH friend, friendCity, distance, unis,
-             COLLECT(DISTINCT {companyName: company.name, workFrom: workAt.workFrom,
-                               countryName: companyPlace.name}) AS companies
+             COLLECT(CASE WHEN company IS NULL THEN NULL
+                          ELSE {companyName: company.name, workFrom: workAt.workFrom,
+                                countryName: companyCountry.name} END) AS companies
         RETURN friend.ID AS friendId, friend.lastName AS friendLastName,
                distance AS distanceFromPerson, friend.birthday AS friendBirthday,
                friend.creationDate AS friendCreationDate, friend.gender AS friendGender,
@@ -243,11 +174,8 @@ def run_query1(conn: Connection, personId: int | None = None, firstName: str | N
 def run_query2(conn: Connection, personId: int | None = None, maxDate: str | None = None):
     """Q2. Recent posts+comments of friends of $personId, created <= $maxDate.
 
-    Parameters:
-        $personId -- start Person ID.
-        $maxDate  -- upper bound (inclusive) "YYYY-MM-DD HH:MM:SS" timestamp
-                     (official: epoch millis).
-    Ordered by creation date DESC, message ID ASC. LIMIT 20.
+    Official shape: single MATCH/WHERE/RETURN + ORDER BY/LIMIT; Message split
+    into Post/Comment UNION ALL branches (schema), DB-level ORDER BY/LIMIT.
     """
     p = PARAMS[2].copy()
     if personId is not None:
@@ -255,31 +183,23 @@ def run_query2(conn: Connection, personId: int | None = None, maxDate: str | Non
     if maxDate is not None:
         p["maxDate"] = maxDate
     query = """
-        // friends' posts created <= $maxDate
-        MATCH (start:Person {ID: $personId})-[:knows]-(friend:Person),
-              (post:Post)-[:postHasCreator]->(friend)
-        WHERE post.creationDate <= TIMESTAMP($maxDate)
+        MATCH (:Person {ID: $personId})-[:knows]-(friend:Person)<-[:postHasCreator]-(message:Post)
+        WHERE message.creationDate <= TIMESTAMP($maxDate)
         RETURN friend.ID AS personId, friend.firstName AS personFirstName,
-               friend.lastName AS personLastName, post.ID AS postOrCommentId,
-               COALESCE(post.content, post.imageFile) AS postOrCommentContent,
-               post.creationDate AS postOrCommentCreationDate
+               friend.lastName AS personLastName, message.ID AS postOrCommentId,
+               COALESCE(message.content, message.imageFile) AS postOrCommentContent,
+               message.creationDate AS postOrCommentCreationDate
         UNION ALL
-        // friends' comments created <= $maxDate
-        MATCH (start:Person {ID: $personId})-[:knows]-(friend:Person),
-              (c:Comment)-[:commentHasCreator]->(friend)
-        WHERE c.creationDate <= TIMESTAMP($maxDate)
+        MATCH (:Person {ID: $personId})-[:knows]-(friend:Person)<-[:commentHasCreator]-(message:Comment)
+        WHERE message.creationDate <= TIMESTAMP($maxDate)
         RETURN friend.ID AS personId, friend.firstName AS personFirstName,
-               friend.lastName AS personLastName, c.ID AS postOrCommentId,
-               c.content AS postOrCommentContent,
-               c.creationDate AS postOrCommentCreationDate;
-        // intended: ORDER BY postOrCommentCreationDate DESC, postOrCommentId ASC LIMIT 20
-        // (applied client-side, see _execute_union_top)
+               friend.lastName AS personLastName, message.ID AS postOrCommentId,
+               message.content AS postOrCommentContent,
+               message.creationDate AS postOrCommentCreationDate
+        ORDER BY postOrCommentCreationDate DESC, postOrCommentId ASC
+        LIMIT 20;
     """
-    return _execute_union_top(
-        conn, 2, query, p,
-        sort_by=["postOrCommentCreationDate", "postOrCommentId"],
-        descending=[True, False], limit=20,
-    )
+    return _execute(conn, 2, query, p)
 
 
 # ---------------------------------------------------------------------------
@@ -296,20 +216,13 @@ def run_query3(
 ):
     """Q3. Friends/FoF of $personId with messages in $countryXName AND $countryYName.
 
-    Parameters:
-        $personId     -- start Person ID (1-2 hop neighbourhood, excl. self and
-                         friends located in either country, as in official).
-        $countryXName -- first country (Place.name).
-        $countryYName -- second country (Place.name).
-        $startDate    -- window start "YYYY-MM-DD HH:MM:SS" (official: epoch
-                         millis), inclusive.
-        $endDate      -- window end, exclusive (official: ``endDate > t``).
-        $durationDays -- optional convenience: overrides $endDate with
-                         ``$startDate + durationDays`` (spec wording).
-    Posts AND comments located directly in either country count (official
-    ``(message)-[:IS_LOCATED_IN]->(country)``). Ordered by xCount+yCount DESC,
-    friend ID ASC. LIMIT 20.
+    Official shape: country/city preamble + knows neighbourhood with home-city
+    exclusion + message match + grouped counts + ORDER BY/LIMIT, one statement.
+    Post/Comment kinds are two OPTIONAL MATCH branches (UNION cannot feed an
+    aggregation in this dialect), aggregated in successive WITH steps.
     """
+    from datetime import datetime, timedelta
+
     p = PARAMS[3].copy()
     if personId is not None:
         p["personId"] = personId
@@ -331,124 +244,40 @@ def run_query3(
         print(f"[Q3] window: startDate={p['startDate']} + {p['durationDays']} days -> endDate={computed}")
         p["endDate"] = computed
     bound = {k: p[k] for k in ("personId", "countryXName", "countryYName", "startDate", "endDate")}
-    # NOTE: a single Cypher statement starting from the ~8k friends/FoF with
-    # OPTIONAL activity matches exhausts the buffer pool, so the spec is
-    # executed inverted: anchor on the selective (country, window) side,
-    # intersect active creators with the FoF set in Python, then count.
-    # Same parameters, same semantics.
-    print(
-        f"\nQuery 3  parameters: $personId={bound['personId']!r}, "
-        f"$countryXName={bound['countryXName']!r}, $countryYName={bound['countryYName']!r}, "
-        f"$startDate={bound['startDate']!r}, $endDate={bound['endDate']!r}"
-    )
-    import polars as pl
-
-    fof_rows = _get(
-        conn,
-        "MATCH (start:Person {ID: $personId})-[:knows*1..2]-(friend:Person)"
-        " WHERE friend.ID <> $personId RETURN DISTINCT friend.ID AS fid;",
-        {"personId": bound["personId"], "dummy": 0},
-    )
-    fof = {r[0] for r in fof_rows}
-    print(f"[Q3] friends + friends-of-friends: {len(fof)}")
-
-    # active creators per country (posts + comments located in the country)
-    active_x: set = set()
-    active_y: set = set()
-    for country, slot in [(bound["countryXName"], active_x), (bound["countryYName"], active_y)]:
-        for loc_rel, creator_rel in [
-            ("postIsLocatedIn", "postHasCreator"),
-            ("commentIsLocatedIn", "commentHasCreator"),
-        ]:
-            msg_label = "Post" if loc_rel.startswith("post") else "Comment"
-            q = (
-                f"MATCH (pl:Place {{name: $country}})<-[:{loc_rel}]-(m:{msg_label})"
-                f"-[:{creator_rel}]->(f:Person)"
-                " WHERE m.creationDate >= TIMESTAMP($startDate)"
-                " AND m.creationDate < TIMESTAMP($endDate)"
-                " RETURN DISTINCT f.ID AS fid;"
-            )
-            for row in _get(
-                conn,
-                q,
-                {"country": country, "startDate": bound["startDate"], "endDate": bound["endDate"], "dummy": 0},
-            ):
-                slot.add(row[0])
-
-    qualifiers = sorted(fof & active_x & active_y)
-    print(f"[Q3] active in {bound['countryXName']}: {len(active_x & fof)}, "
-          f"in {bound['countryYName']}: {len(active_y & fof)}, in both: {len(qualifiers)}")
-
-    # official home-country exclusion: drop friends located in either country
-    # (directly, or via home place -[:isPartOf]-> country)
-    home_rows: list = []
-    for i in range(0, len(qualifiers), 200):
-        home_rows += _get(
-            conn,
-            "MATCH (f:Person) WHERE f.ID IN $ids "
-            "OPTIONAL MATCH (f)-[:personIsLocatedIn]->(home:Place) "
-            "OPTIONAL MATCH (home)-[:isPartOf]->(parent:Place) "
-            "RETURN f.ID AS fid, home.name AS home, parent.name AS parent;",
-            {"ids": qualifiers[i : i + 200], "dummy": 0},
-        )
-    countries = {bound["countryXName"], bound["countryYName"]}
-    qualifiers = sorted(
-        qid for qid, home, parent in home_rows if home not in countries and parent not in countries
-    )
-    print(f"[Q3] after home-country exclusion: {len(qualifiers)}")
-    if not qualifiers:
-        print("Query 3: no qualifying friends.")
-        return pl.DataFrame()
-
-    # per-kind counts via message-anchored grouped queries (no big IN-lists),
-    # filtered to qualifiers client-side
-    counts: dict[int, dict[str, int]] = {qid: {"xCount": 0, "yCount": 0} for qid in qualifiers}
-    qset = set(qualifiers)
-    for loc_rel, creator_rel, country, slot in [
-        ("postIsLocatedIn", "postHasCreator", bound["countryXName"], "xCount"),
-        ("commentIsLocatedIn", "commentHasCreator", bound["countryXName"], "xCount"),
-        ("postIsLocatedIn", "postHasCreator", bound["countryYName"], "yCount"),
-        ("commentIsLocatedIn", "commentHasCreator", bound["countryYName"], "yCount"),
-    ]:
-        msg_label = "Post" if loc_rel.startswith("post") else "Comment"
-        cq = (
-            f"MATCH (pl:Place {{name: $country}})<-[:{loc_rel}]-(m:{msg_label})"
-            f"-[:{creator_rel}]->(f:Person)"
-            " WHERE m.creationDate >= TIMESTAMP($startDate)"
-            " AND m.creationDate < TIMESTAMP($endDate)"
-            " RETURN f.ID AS personId, COUNT(m) AS n;"
-        )
-        for row in _get(
-            conn, cq,
-            {"country": country, "startDate": bound["startDate"], "endDate": bound["endDate"], "dummy": 0},
-        ):
-            if row[0] in qset:
-                counts[row[0]][slot] += row[1]
-    print("Query 3: (official: xCount/yCount per friend; ORDER BY xCount+yCount DESC, friendId ASC LIMIT 20)")
-    name_rows: list = []
-    for i in range(0, len(qualifiers), 200):
-        name_rows += _get(
-            conn,
-            "MATCH (f:Person) WHERE f.ID IN $ids RETURN f.ID AS personId, f.firstName AS firstName,"
-            " f.lastName AS lastName;",
-            {"ids": qualifiers[i : i + 200], "dummy": 0},
-        )
-    names = {r[0]: (r[1], r[2]) for r in name_rows}
-    df = pl.DataFrame(
-        [
-            {
-                "friendId": qid,
-                "friendFirstName": names[qid][0],
-                "friendLastName": names[qid][1],
-                "xCount": counts[qid]["xCount"],
-                "yCount": counts[qid]["yCount"],
-                "xyCount": counts[qid]["xCount"] + counts[qid]["yCount"],
-            }
-            for qid in qualifiers
-        ]
-    ).sort(["xyCount", "friendId"], descending=[True, False]).head(20)
-    print(df)
-    return df
+    query = """
+        MATCH (countryX:Place {name: $countryXName}), (countryY:Place {name: $countryYName}),
+              (person:Person {ID: $personId})
+        WITH person, countryX, countryY
+        LIMIT 1
+        MATCH (city:Place)-[:isPartOf]->(country:Place)
+        WHERE country IN [countryX, countryY]
+        WITH person, countryX, countryY, COLLECT(city) AS cities
+        MATCH (person)-[:knows*1..2]-(friend:Person)-[:personIsLocatedIn]->(fcity:Place)
+        WHERE friend.ID <> person.ID AND NOT fcity IN cities
+        WITH DISTINCT friend, countryX, countryY
+        OPTIONAL MATCH (friend)<-[:postHasCreator]-(ppost:Post)-[:postIsLocatedIn]->(pcountry:Place)
+        WHERE ppost.creationDate >= TIMESTAMP($startDate)
+          AND ppost.creationDate < TIMESTAMP($endDate)
+          AND pcountry IN [countryX, countryY]
+        WITH friend, countryX, countryY,
+             SUM(CASE WHEN pcountry = countryX THEN 1 ELSE 0 END) AS postX,
+             SUM(CASE WHEN pcountry = countryY THEN 1 ELSE 0 END) AS postY
+        OPTIONAL MATCH (friend)<-[:commentHasCreator]-(cmt:Comment)-[:commentIsLocatedIn]->(ccountry:Place)
+        WHERE cmt.creationDate >= TIMESTAMP($startDate)
+          AND cmt.creationDate < TIMESTAMP($endDate)
+          AND ccountry IN [countryX, countryY]
+        WITH friend, postX, postY,
+             SUM(CASE WHEN ccountry = countryX THEN 1 ELSE 0 END) AS cmtX,
+             SUM(CASE WHEN ccountry = countryY THEN 1 ELSE 0 END) AS cmtY
+        WITH friend, postX + cmtX AS xCount, postY + cmtY AS yCount
+        WHERE xCount > 0 AND yCount > 0
+        RETURN friend.ID AS friendId, friend.firstName AS friendFirstName,
+               friend.lastName AS friendLastName, xCount, yCount,
+               xCount + yCount AS xyCount
+        ORDER BY xyCount DESC, friendId ASC
+        LIMIT 20;
+    """
+    return _execute(conn, 3, query, bound)
 
 
 # ---------------------------------------------------------------------------
@@ -462,13 +291,8 @@ def run_query4(
 ):
     """Q4. Tags used on friends' posts only within [$startDate, $endDate).
 
-    Parameters:
-        $personId  -- start Person ID (only direct friends' posts).
-        $startDate -- interval start (official: epoch millis), inclusive.
-        $endDate   -- interval end, exclusive.
-    A tag qualifies if it has posts in the window AND zero posts before the
-    window (official ``postCount > 0 AND inValidPostCount = 0``).
-    Ordered by post count DESC, tag name ASC. LIMIT 10.
+    Official shape: DISTINCT tag/post + valid/inValid CASE + SUM/GROUP +
+    HAVING + ORDER BY/LIMIT.
     """
     p = PARAMS[4].copy()
     if personId is not None:
@@ -478,15 +302,14 @@ def run_query4(
     if endDate is not None:
         p["endDate"] = endDate
     query = """
-        MATCH (start:Person {ID: $personId})-[:knows]-(friend:Person),
+        MATCH (person:Person {ID: $personId})-[:knows]-(friend:Person),
               (friend)<-[:postHasCreator]-(post:Post)-[:postHasTag]->(tag:Tag)
         WITH DISTINCT tag, post
         WITH tag,
-             SUM(CASE WHEN post.creationDate >= TIMESTAMP($startDate)
-                       AND post.creationDate < TIMESTAMP($endDate)
-                      THEN 1 ELSE 0 END) AS postCount,
-             SUM(CASE WHEN post.creationDate < TIMESTAMP($startDate)
-                      THEN 1 ELSE 0 END) AS inValidPostCount
+             CASE WHEN post.creationDate >= TIMESTAMP($startDate)
+                   AND post.creationDate < TIMESTAMP($endDate) THEN 1 ELSE 0 END AS valid,
+             CASE WHEN post.creationDate < TIMESTAMP($startDate) THEN 1 ELSE 0 END AS inValid
+        WITH tag, SUM(valid) AS postCount, SUM(inValid) AS inValidPostCount
         WHERE postCount > 0 AND inValidPostCount = 0
         RETURN tag.name AS tagName, postCount
         ORDER BY postCount DESC, tagName ASC
@@ -501,12 +324,8 @@ def run_query4(
 def run_query5(conn: Connection, personId: int | None = None, minDate: str | None = None):
     """Q5. Forums friends/FoF joined after $minDate, ranked by their posts.
 
-    Parameters:
-        $personId -- start Person ID (1-2 hop neighbourhood, excl. self).
-        $minDate  -- lower bound (exclusive) on hasMember.joinDate
-                     (official: epoch millis).
-    Ordered by post count DESC, forum ID ASC. LIMIT 20. Forums with zero
-    posts by these members are kept (official OPTIONAL MATCH).
+    Official shape: neighbourhood + member match + collect + OPTIONAL
+    post match with IN-friends filter + COUNT/GROUP + ORDER BY/LIMIT.
     """
     p = PARAMS[5].copy()
     if personId is not None:
@@ -514,14 +333,14 @@ def run_query5(conn: Connection, personId: int | None = None, minDate: str | Non
     if minDate is not None:
         p["minDate"] = minDate
     query = """
-        MATCH (start:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
-        WHERE friend.ID <> $personId
+        MATCH (person:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
+        WHERE NOT person = friend
         WITH DISTINCT friend
-        MATCH (forum:Forum)-[membership:hasMember]->(friend)
+        MATCH (friend)<-[membership:hasMember]-(forum:Forum)
         WHERE membership.joinDate > TIMESTAMP($minDate)
         WITH forum, COLLECT(friend) AS friends
         OPTIONAL MATCH (author:Person)<-[:postHasCreator]-(post:Post)<-[:containerOf]-(forum)
-            WHERE author IN friends
+        WHERE author IN friends
         WITH forum, COUNT(post) AS postCount
         RETURN forum.title AS forumName, postCount
         ORDER BY postCount DESC, forum.ID ASC
@@ -536,10 +355,8 @@ def run_query5(conn: Connection, personId: int | None = None, minDate: str | Non
 def run_query6(conn: Connection, personId: int | None = None, tagName: str | None = None):
     """Q6. Tags co-occurring with $tagName on friends/FoF posts.
 
-    Parameters:
-        $personId -- start Person ID (1-2 hop neighbourhood, excl. self).
-        $tagName  -- anchor Tag.name.
-    Top 10 other tags ordered by co-occurring post count DESC, tag name ASC.
+    Official shape: anchor tag id + neighbourhood collect + UNWIND + MATCH +
+    GROUP + ORDER BY/LIMIT.
     """
     p = PARAMS[6].copy()
     if personId is not None:
@@ -547,13 +364,13 @@ def run_query6(conn: Connection, personId: int | None = None, tagName: str | Non
     if tagName is not None:
         p["tagName"] = tagName
     query = """
-        MATCH (given:Tag {name: $tagName})
-        WITH given.ID AS knownTagId
-        MATCH (start:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
-        WHERE friend.ID <> $personId
-        WITH knownTagId, COLLECT(DISTINCT friend.ID) AS friendIds
-        UNWIND friendIds AS fid
-        MATCH (f:Person {ID: fid})<-[:postHasCreator]-(post:Post),
+        MATCH (knownTag:Tag {name: $tagName})
+        WITH knownTag.ID AS knownTagId
+        MATCH (person:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
+        WHERE NOT person = friend
+        WITH knownTagId, COLLECT(DISTINCT friend) AS friends
+        UNWIND friends AS f
+        MATCH (f)<-[:postHasCreator]-(post:Post),
               (post)-[:postHasTag]->(t:Tag {ID: knownTagId}),
               (post)-[:postHasTag]->(tag:Tag)
         WHERE NOT t = tag
@@ -571,71 +388,51 @@ def run_query6(conn: Connection, personId: int | None = None, tagName: str | Non
 def run_query7(conn: Connection, personId: int | None = None):
     """Q7. Most recent likers of $personId's posts+comments (one row per liker).
 
-    Parameters:
-        $personId -- owner Person ID.
-    Per liker only the latest like is kept (official ``head(collect(...))``).
-    ``minutesLatency`` = whole minutes between message and like (computed
-    client-side: Ladybug has no interval-to-epoch function); ``isNew`` flags
-    likers outside the direct knows neighbourhood. Ordered by like date DESC,
-    liker ID ASC. LIMIT 20.
+    Official shape: MATCH/ORDER BY/head(collect)/RETURN/ORDER BY/LIMIT.
+    Post/Comment like kinds are collected per kind then concatenated and
+    unnested (UNION cannot feed the head-per-group WITH in this dialect);
+    head() is COLLECT(...)[1]; minutes come from the like-message interval.
     """
     p = PARAMS[7].copy()
     if personId is not None:
         p["personId"] = personId
-    bound = {"personId": p["personId"]}
-    print(f"\nQuery 7  parameters: $personId={bound['personId']!r}")
-    import polars as pl
-
-    # NOTE: single statement over both like-tables; latest-per-liker and the
-    # top-20 are selected client-side (see _execute_union_top rationale).
     query = """
-        // likes of own posts
-        MATCH (liker:Person)-[l:likePost]->(msg:Post)-[:postHasCreator]->(owner:Person {ID: $personId})
-        OPTIONAL MATCH (liker)-[k:knows]-(owner)
-        RETURN liker.ID AS likerId, liker.firstName AS likerFirstName,
-               liker.lastName AS likerLastName, l.creationDate AS likeTime,
-               msg.ID AS msgId, COALESCE(msg.content, msg.imageFile) AS msgContent,
-               msg.creationDate AS msgTime,
-               (CASE WHEN k IS NULL THEN 1 ELSE 0 END) AS isOutsider
-        UNION ALL
-        // likes of own comments
-        MATCH (liker:Person)-[l:likeComment]->(msg:Comment)-[:commentHasCreator]->(owner:Person {ID: $personId})
-        OPTIONAL MATCH (liker)-[k:knows]-(owner)
-        RETURN liker.ID AS likerId, liker.firstName AS likerFirstName,
-               liker.lastName AS likerLastName, l.creationDate AS likeTime,
-               msg.ID AS msgId, msg.content AS msgContent,
-               msg.creationDate AS msgTime,
-               (CASE WHEN k IS NULL THEN 1 ELSE 0 END) AS isOutsider;
-        // intended: latest like per liker; ORDER BY likeTime DESC, likerId ASC LIMIT 20
+        MATCH (person:Person {ID: $personId})
+        OPTIONAL MATCH (person)<-[:postHasCreator]-(pmsg:Post)<-[plike:likePost]-(pliker:Person)
+        WITH person, COLLECT({likerId: pliker.ID, msgId: pmsg.ID,
+                              msgContent: COALESCE(pmsg.content, pmsg.imageFile),
+                              msgTime: pmsg.creationDate,
+                              likeTime: plike.creationDate}) AS prows
+        OPTIONAL MATCH (person)<-[:commentHasCreator]-(cmsg:Comment)<-[clike:likeComment]-(cliker:Person)
+        WITH person, prows, COLLECT({likerId: cliker.ID, msgId: cmsg.ID,
+                                     msgContent: cmsg.content,
+                                     msgTime: cmsg.creationDate,
+                                     likeTime: clike.creationDate}) AS crows
+        WITH person, prows + crows AS rows
+        UNWIND rows AS r
+        WITH person, r WHERE r.likerId IS NOT NULL
+        WITH r.likerId AS likerId, r.msgId AS msgId, r.msgContent AS msgContent,
+             r.msgTime AS msgTime, r.likeTime AS likeTime, person
+        MATCH (liker:Person {ID: likerId})
+        OPTIONAL MATCH (liker)-[k:knows]-(person)
+        WITH liker, msgId, msgContent, msgTime, likeTime, person, (k IS NULL) AS isNew0
+        ORDER BY likeTime DESC, msgId ASC
+        LIMIT 1000000000
+        WITH liker, COLLECT({msgId: msgId, msgContent: msgContent, msgTime: msgTime,
+                             likeTime: likeTime, isNew: isNew0})[1] AS latestLike, person
+        RETURN liker.ID AS personId, liker.firstName AS personFirstName,
+               liker.lastName AS personLastName,
+               latestLike.likeTime AS likeCreationDate,
+               latestLike.msgId AS commentOrPostId,
+               latestLike.msgContent AS commentOrPostContent,
+               (date_part('day', latestLike.likeTime - latestLike.msgTime) * 1440
+                + date_part('hour', latestLike.likeTime - latestLike.msgTime) * 60
+                + date_part('minute', latestLike.likeTime - latestLike.msgTime)) AS minutesLatency,
+               latestLike.isNew AS isNew
+        ORDER BY likeCreationDate DESC, personId ASC
+        LIMIT 20;
     """
-    print(f"Query 7:\n{query}")
-    response = conn.execute(query, {**bound, "dummy": 0})
-    df = response.get_as_pl()
-    response.close()
-    assert isinstance(df, pl.DataFrame)
-    # latest like per liker (tie -> smallest msg id), then top-20
-    best_rows = []
-    for liker_id in df["likerId"].unique().to_list():
-        sub = df.filter(pl.col("likerId") == liker_id)
-        top_time = sub["likeTime"].max()
-        best = sub.filter(pl.col("likeTime") == top_time).sort("msgId").head(1)
-        best_rows.append(best)
-    top = pl.concat(best_rows)
-    top = top.with_columns(
-        ((pl.col("likeTime") - pl.col("msgTime")).dt.total_seconds() // 60).alias("minutesLatency"),
-        (pl.col("isOutsider") == 1).alias("isNew"),
-    ).select(
-        pl.col("likerId").alias("personId"),
-        pl.col("likerFirstName").alias("personFirstName"),
-        pl.col("likerLastName").alias("personLastName"),
-        pl.col("likeTime").alias("likeCreationDate"),
-        pl.col("msgId").alias("commentOrPostId"),
-        pl.col("msgContent").alias("commentOrPostContent"),
-        "minutesLatency",
-        "isNew",
-    ).sort(["likeCreationDate", "personId"], descending=[True, False]).head(20)
-    print(top)
-    return top
+    return _execute(conn, 7, query, {"personId": p["personId"]})
 
 
 # ---------------------------------------------------------------------------
@@ -644,38 +441,30 @@ def run_query7(conn: Connection, personId: int | None = None):
 def run_query8(conn: Connection, personId: int | None = None):
     """Q8. Most recent reply comments to $personId's posts+comments.
 
-    Parameters:
-        $personId -- owner Person ID.
-    Covers replyOfPost (to own posts) and replyOfComment (to own comments).
-    Ordered by reply creation date DESC, reply ID ASC. LIMIT 20.
+    Official shape: single MATCH/RETURN/ORDER BY/LIMIT over REPLY_OF;
+    replyOfPost/replyOfComment are UNION ALL branches (schema).
     """
     p = PARAMS[8].copy()
     if personId is not None:
         p["personId"] = personId
     query = """
-        // replies to own posts
-        MATCH (owner:Person {ID: $personId})<-[:postHasCreator]-(post:Post)
+        MATCH (start:Person {ID: $personId})<-[:postHasCreator]-(post:Post)
               <-[:replyOfPost]-(comment:Comment)-[:commentHasCreator]->(person:Person)
         RETURN person.ID AS personId, person.firstName AS personFirstName,
                person.lastName AS personLastName,
                comment.creationDate AS commentCreationDate, comment.ID AS commentId,
                comment.content AS commentContent
         UNION ALL
-        // replies to own comments
-        MATCH (owner:Person {ID: $personId})<-[:commentHasCreator]-(parent:Comment)
+        MATCH (start:Person {ID: $personId})<-[:commentHasCreator]-(parent:Comment)
               <-[:replyOfComment]-(comment:Comment)-[:commentHasCreator]->(person:Person)
         RETURN person.ID AS personId, person.firstName AS personFirstName,
                person.lastName AS personLastName,
                comment.creationDate AS commentCreationDate, comment.ID AS commentId,
-               comment.content AS commentContent;
-        // intended: ORDER BY commentCreationDate DESC, commentId ASC LIMIT 20
-        // (applied client-side, see _execute_union_top)
+               comment.content AS commentContent
+        ORDER BY commentCreationDate DESC, commentId ASC
+        LIMIT 20;
     """
-    return _execute_union_top(
-        conn, 8, query, p,
-        sort_by=["commentCreationDate", "commentId"],
-        descending=[True, False], limit=20,
-    )
+    return _execute(conn, 8, query, p)
 
 
 # ---------------------------------------------------------------------------
@@ -684,11 +473,8 @@ def run_query8(conn: Connection, personId: int | None = None):
 def run_query9(conn: Connection, personId: int | None = None, maxDate: str | None = None):
     """Q9. Recent posts+comments of friends/FoF of $personId, before $maxDate.
 
-    Parameters:
-        $personId -- start Person ID (1-2 hop neighbourhood, excl. self).
-        $maxDate  -- upper bound (STRICT, official ``<``) "YYYY-MM-DD HH:MM:SS"
-                     timestamp (official: epoch millis).
-    Ordered by creation date DESC, message ID ASC. LIMIT 20.
+    Official shape: neighbourhood collect + UNWIND + message MATCH +
+    RETURN/ORDER BY/LIMIT; Post/Comment are UNION ALL branches (schema).
     """
     p = PARAMS[9].copy()
     if personId is not None:
@@ -696,35 +482,31 @@ def run_query9(conn: Connection, personId: int | None = None, maxDate: str | Non
     if maxDate is not None:
         p["maxDate"] = maxDate
     query = """
-        // friends/FoF posts created strictly before $maxDate
         MATCH (root:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
-        WHERE friend.ID <> $personId
-        WITH DISTINCT friend
-        MATCH (friend)<-[:postHasCreator]-(message:Post)
+        WHERE NOT friend = root
+        WITH COLLECT(DISTINCT friend) AS friends
+        UNWIND friends AS f
+        MATCH (f)<-[:postHasCreator]-(message:Post)
         WHERE message.creationDate < TIMESTAMP($maxDate)
-        RETURN friend.ID AS personId, friend.firstName AS personFirstName,
-               friend.lastName AS personLastName, message.ID AS commentOrPostId,
+        RETURN f.ID AS personId, f.firstName AS personFirstName,
+               f.lastName AS personLastName, message.ID AS commentOrPostId,
                COALESCE(message.content, message.imageFile) AS commentOrPostContent,
                message.creationDate AS commentOrPostCreationDate
         UNION ALL
-        // friends/FoF comments created strictly before $maxDate
         MATCH (root:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
-        WHERE friend.ID <> $personId
-        WITH DISTINCT friend
-        MATCH (friend)<-[:commentHasCreator]-(message:Comment)
+        WHERE NOT friend = root
+        WITH COLLECT(DISTINCT friend) AS friends
+        UNWIND friends AS f
+        MATCH (f)<-[:commentHasCreator]-(message:Comment)
         WHERE message.creationDate < TIMESTAMP($maxDate)
-        RETURN friend.ID AS personId, friend.firstName AS personFirstName,
-               friend.lastName AS personLastName, message.ID AS commentOrPostId,
+        RETURN f.ID AS personId, f.firstName AS personFirstName,
+               f.lastName AS personLastName, message.ID AS commentOrPostId,
                message.content AS commentOrPostContent,
-               message.creationDate AS commentOrPostCreationDate;
-        // intended: ORDER BY commentOrPostCreationDate DESC, commentOrPostId ASC LIMIT 20
-        // (applied client-side, see _execute_union_top)
+               message.creationDate AS commentOrPostCreationDate
+        ORDER BY commentOrPostCreationDate DESC, commentOrPostId ASC
+        LIMIT 20;
     """
-    return _execute_union_top(
-        conn, 9, query, p,
-        sort_by=["commentOrPostCreationDate", "commentOrPostId"],
-        descending=[True, False], limit=20,
-    )
+    return _execute(conn, 9, query, p)
 
 
 # ---------------------------------------------------------------------------
@@ -733,16 +515,10 @@ def run_query9(conn: Connection, personId: int | None = None, maxDate: str | Non
 def run_query10(conn: Connection, personId: int | None = None, month: int | None = None):
     """Q10. Friend-of-friend recommender for $personId.
 
-    Parameters:
-        $personId -- start Person ID.
-        $month    -- zodiac start month: candidates whose birthday falls in
-                     [month/21, next-month/22), i.e. the official horoscope
-                     predicate ``(m = $month AND d >= 21) OR
-                     (m = ($month % 12) + 1 AND d < 22)``.
-    Candidates = exact-2-hop friends, excluding direct friends and self.
-    Score = common-interest posts minus other posts, where a post is
-    "common" if it carries one of $personId's interest tags. Ordered by score
-    DESC, person ID ASC. LIMIT 10.
+    Official shape: 2-hop + city MATCH, zodiac filter, DISTINCT,
+    OPTIONAL post match, collect/size/common counts, RETURN/ORDER BY/LIMIT.
+    The post-list size filter is a second OPTIONAL MATCH + COUNT DISTINCT
+    in the same statement (list comprehensions do not exist here).
     """
     p = PARAMS[10].copy()
     if personId is not None:
@@ -752,21 +528,17 @@ def run_query10(conn: Connection, personId: int | None = None, month: int | None
     query = """
         MATCH (person:Person {ID: $personId})-[:hasInterest]->(i:Tag)
         WITH person, COLLECT(i) AS interests
-        MATCH (person)-[:knows]-(:Person)-[:knows]-(friend:Person)
-        WHERE friend.ID <> person.ID
-          AND NOT EXISTS { MATCH (person)-[:knows]-(friend) }
-        WITH DISTINCT person, interests, friend
-        WHERE (date_part("month", friend.birthday) = $month
-               AND date_part("day", friend.birthday) >= 21)
-           OR (date_part("month", friend.birthday) = ($month % 12) + 1
-               AND date_part("day", friend.birthday) < 22)
-        WITH person, interests, friend
-        OPTIONAL MATCH (friend)<-[:postHasCreator]-(common:Post)-[:postHasTag]->(it:Tag)
-            WHERE it IN interests
-        WITH person, friend, COUNT(DISTINCT common) AS commonPostCount
-        OPTIONAL MATCH (friend)<-[:postHasCreator]-(ap:Post)
-        WITH friend, commonPostCount, COUNT(DISTINCT ap) AS postCount
-        MATCH (friend)-[:personIsLocatedIn]->(city:Place)
+        MATCH (person)-[:knows*2..2]-(friend:Person),
+              (friend)-[:personIsLocatedIn]->(city:Place {type: 'city'})
+        WHERE NOT friend = person AND NOT (friend)-[:knows]-(person)
+        WITH person, city, friend, interests, friend.birthday AS birthday
+        WHERE (date_part('month', birthday) = $month AND date_part('day', birthday) >= 21)
+           OR (date_part('month', birthday) = ($month % 12) + 1 AND date_part('day', birthday) < 22)
+        WITH DISTINCT friend, city, person, interests
+        OPTIONAL MATCH (friend)<-[:postHasCreator]-(post:Post)
+        OPTIONAL MATCH (post)-[:postHasTag]->(t:Tag) WHERE t IN interests
+        WITH friend, city, COUNT(DISTINCT post) AS postCount,
+             COUNT(DISTINCT CASE WHEN t IS NOT NULL THEN post END) AS commonPostCount
         RETURN friend.ID AS personId, friend.firstName AS personFirstName,
                friend.lastName AS personLastName,
                commonPostCount - (postCount - commonPostCount) AS commonInterestScore,
@@ -788,11 +560,8 @@ def run_query11(
 ):
     """Q11. Friends/FoF who started at a $countryName company before $workFromYear.
 
-    Parameters:
-        $personId      -- start Person ID (1-2 hop neighbourhood, excl. self).
-        $countryName   -- country Place.name of the company.
-        $workFromYear  -- exclusive upper bound on workAt.workFrom (start year).
-    Ordered by workFrom ASC, person ID ASC, company name DESC. LIMIT 10.
+    Official shape: neighbourhood DISTINCT + work/company/country MATCH +
+    RETURN/ORDER BY/LIMIT (:Company emulated via Organisation type).
     """
     p = PARAMS[11].copy()
     if personId is not None:
@@ -803,11 +572,11 @@ def run_query11(
         p["workFromYear"] = workFromYear
     query = """
         MATCH (person:Person {ID: $personId})-[:knows*1..2]-(friend:Person)
-        WHERE friend.ID <> $personId
+        WHERE NOT person = friend
         WITH DISTINCT friend
-        MATCH (friend)-[workAt:workAt]->(company:Organisation)
-                  -[:organisationIsLocatedIn]->(:Place {name: $countryName})
-        WHERE company.type = "company" AND workAt.workFrom < $workFromYear
+        MATCH (friend)-[workAt:workAt]->(company:Organisation {type: 'company'})
+                  -[:organisationIsLocatedIn]->(country:Place {name: $countryName, type: 'country'})
+        WHERE workAt.workFrom < $workFromYear
         RETURN friend.ID AS personId, friend.firstName AS personFirstName,
                friend.lastName AS personLastName, company.name AS organizationName,
                workAt.workFrom AS organizationWorkFromYear
@@ -823,55 +592,30 @@ def run_query11(
 def run_query12(conn: Connection, personId: int | None = None, tagClassName: str | None = None):
     """Q12. Friends of $personId replying most to $tagClassName posts.
 
-    Parameters:
-        $personId     -- start Person ID (direct friends only).
-        $tagClassName -- Tagclass.name (official ``tagClassName``); matches the
-                         tag of that name (if any) plus all tags whose
-                         ``-[:hasType]->-[:isSubclassOf*0..]->`` hierarchy
-                         reaches that class (official
-                         ``HAS_TYPE|IS_SUBCLASS_OF*0..``).
-    Counts friends' comments replying (replyOfPost) to posts carrying those
-    tags. Returns reply tag names + reply count, ordered by count DESC,
-    person ID ASC. LIMIT 20.
+    Official shape: single statement; tag hierarchy via the
+    HAS_TYPE|IS_SUBCLASS_OF alternation + collect, then friend/reply/post/tag
+    MATCH with IN-tags filter + GROUP/ORDER BY/LIMIT.
     """
     p = PARAMS[12].copy()
     if personId is not None:
         p["personId"] = personId
     if tagClassName is not None:
         p["tagClassName"] = tagClassName
-    # NOTE: resolved in two small steps (a big IN-list or a single
-    # alternation pattern is unreliable here); same semantics.
-    direct = _get(
-        conn,
-        "MATCH (t:Tag) WHERE t.name = $tagClassName RETURN t.ID AS tid;",
-        {"tagClassName": p["tagClassName"], "dummy": 0},
-    )
-    hier = _get(
-        conn,
-        "MATCH (t:Tag)-[:hasType]->(:Tagclass)-[:isSubclassOf*0..]->(base:Tagclass {name: $tagClassName})"
-        " RETURN DISTINCT t.ID AS tid;",
-        {"tagClassName": p["tagClassName"], "dummy": 0},
-    )
-    tag_ids = sorted({r[0] for r in direct} | {r[0] for r in hier})
-    print(f"[Q12] tags in '{p['tagClassName']}' hierarchy: {len(tag_ids)}")
-    if not tag_ids:
-        print("Query 12: no tags for this class.")
-        return []
     query = """
-        MATCH (me:Person {ID: $personId})-[:knows]-(friend:Person)
-        WITH DISTINCT friend
-        MATCH (reply:Comment)-[:commentHasCreator]->(friend),
-              (reply)-[:replyOfPost]->(post:Post)-[:postHasTag]->(tag:Tag)
-        WHERE tag.ID IN $tagIds
+        MATCH (tag:Tag)-[:hasType|isSubclassOf*0..]->(baseTagClass:Tagclass)
+        WHERE tag.name = $tagClassName OR baseTagClass.name = $tagClassName
+        WITH COLLECT(tag.ID) AS tags
+        MATCH (:Person {ID: $personId})-[:knows]-(friend:Person)
+              <-[:commentHasCreator]-(comment:Comment)-[:replyOfPost]->(:Post)-[:postHasTag]->(tag:Tag)
+        WHERE tag.ID IN tags
         RETURN friend.ID AS personId, friend.firstName AS personFirstName,
                friend.lastName AS personLastName,
                COLLECT(DISTINCT tag.name) AS tagNames,
-               COUNT(DISTINCT reply) AS replyCount
+               COUNT(DISTINCT comment) AS replyCount
         ORDER BY replyCount DESC, personId ASC
         LIMIT 20;
     """
-    print(f"Query 12:\n{query}")
-    return _execute(conn, 12, query, {"personId": p["personId"], "tagIds": tag_ids})
+    return _execute(conn, 12, query, p)
 
 
 # ---------------------------------------------------------------------------
@@ -880,12 +624,8 @@ def run_query12(conn: Connection, personId: int | None = None, tagClassName: str
 def run_query13(conn: Connection, person1Id: int | None = None, person2Id: int | None = None):
     """Q13. Shortest knows-path length between $person1Id and $person2Id.
 
-    Parameters:
-        $person1Id -- start Person ID (official ``person1Id``).
-        $person2Id -- target Person ID (official ``person2Id``).
-    Undirected traversal of the knows subgraph (edges are stored directed).
-    Returns -1 when disconnected (official ``CASE path IS NULL``), via Python
-    since an empty SHORTEST match yields no row.
+    Official shape: single statement with null-path CASE (unbounded hop
+    range; SHORTEST is the dialect spelling of shortestPath).
     """
     p = PARAMS[13].copy()
     if person1Id is not None:
@@ -893,59 +633,23 @@ def run_query13(conn: Connection, person1Id: int | None = None, person2Id: int |
     if person2Id is not None:
         p["person2Id"] = person2Id
     query = """
-        MATCH (person1:Person {ID: $person1Id})-[e:knows* SHORTEST 1..10]-(person2:Person {ID: $person2Id})
-        RETURN LENGTH(e) AS shortestPathLength;
+        OPTIONAL MATCH (person1:Person {ID: $person1Id})-[path:knows* SHORTEST]-(person2:Person {ID: $person2Id})
+        RETURN CASE WHEN path IS NULL THEN -1 ELSE LENGTH(path) END AS shortestPathLength;
     """
-    result = _execute(conn, 13, query, p)
-    try:
-        if len(result) == 0:  # type: ignore
-            print("Query 13: disconnected -> shortestPathLength = -1")
-            return -1
-    except TypeError:
-        pass
-    return result
+    return _execute(conn, 13, query, p)
 
 
 # ---------------------------------------------------------------------------
 # Q14. Trusted connection paths (official: complex-14).
 # ---------------------------------------------------------------------------
-def _count_weighted_exchanges(conn: Connection, x: int, y: int) -> tuple[int, int]:
-    """Interaction volumes between persons X and Y (both directions).
-
-    Official weights: comment-reply-post pairs count 1.0 each, and
-    comment-reply-comment pairs 0.5 each. The knows table itself carries no
-    weight property, so reply volume is the weight (official ``reduce``).
-    Returns (post_replies, comment_replies).
-    """
-    rows = _get(
-        conn,
-        """
-        MATCH (c:Comment)-[:commentHasCreator]->(x:Person {ID: $x}),
-              (c)-[:replyOfPost]->(post:Post)-[:postHasCreator]->(y:Person {ID: $y})
-        RETURN COUNT(c) AS n
-        UNION ALL
-        MATCH (c:Comment)-[:commentHasCreator]->(x:Person {ID: $x}),
-              (c)-[:replyOfComment]->(pc:Comment)-[:commentHasCreator]->(y:Person {ID: $y})
-        RETURN COUNT(c) AS n
-        """,
-        {"x": x, "y": y, "dummy": 0},
-    )
-    post_n = rows[0][0] if len(rows) > 0 else 0
-    comment_n = rows[1][0] if len(rows) > 1 else 0
-    return post_n, comment_n
-
-
 def run_query14(conn: Connection, person1Id: int | None = None, person2Id: int | None = None):
     """Q14. All shortest knows-paths between $person1Id and $person2Id, weighted.
 
-    Parameters:
-        $person1Id -- start Person ID (official ``person1Id``).
-        $person2Id -- target Person ID (official ``person2Id``).
-    Step 1 finds the shortest length L (as in Q13). Step 2 enumerates every
-    L-hop path (unrolled undirected knows chain built in Python; Ladybug has
-    no ``allShortestPaths``/``reduce``). Step 3 weights each edge with
-    ``1.0 * postReplies + 0.5 * commentReplies`` (official weights); path
-    weight = sum of edge weights. Ordered by path weight DESC (official).
+    Official shape: allShortestPaths + per-edge reply weights (1.0 post,
+    0.5 comment, both directions) + ORDER BY weight DESC. allShortestPaths /
+    reduce() do not exist in this dialect, so: (1) one length probe (same
+    null-shape as Q13); (2) ONE enumeration-plus-weighting statement with an
+    unrolled L-hop chain and DB-side COUNT(DISTINCT ...) weights.
     """
     p = PARAMS[14].copy()
     if person1Id is not None:
@@ -954,51 +658,71 @@ def run_query14(conn: Connection, person1Id: int | None = None, person2Id: int |
         p["person2Id"] = person2Id
     x, y = p["person1Id"], p["person2Id"]
 
-    # --- step 1: shortest length ------------------------------------------------
     rows = _get(
         conn,
-        "MATCH (a:Person {ID: $person1Id})-[e:knows* SHORTEST 1..10]-(b:Person {ID: $person2Id})"
-        " RETURN LENGTH(e) AS shortestPathLength;",
+        "OPTIONAL MATCH (a:Person {ID: $person1Id})-[e:knows* SHORTEST]-(b:Person {ID: $person2Id})"
+        " RETURN CASE WHEN e IS NULL THEN -1 ELSE LENGTH(e) END AS shortestPathLength;",
         {"person1Id": x, "person2Id": y, "dummy": 0},
     )
-    if not rows:
-        print(f"\nQuery 14  parameters: $person1Id={x!r}, $person2Id={y!r}")
-        print("Query 14: no knows-path between the two persons (within 10 hops).")
-        return rows
-    length = rows[0][0]
+    length = rows[0][0] if rows else -1
     print(f"\nQuery 14  parameters: $person1Id={x!r}, $person2Id={y!r}")
-    print(f"Query 14: shortest length = {length}; enumerating all {length}-hop paths ...")
+    if length < 0:
+        print("Query 14: no knows-path between the two persons.")
+        return rows
+    print(f"Query 14: shortest length = {length}; enumerating + weighting in one statement ...")
 
-    # --- step 2: enumerate all L-hop paths (unrolled chain) ---------------------
     nodes = ["a"] + [f"n{i}" for i in range(1, length)] + ["b"]
-    match = f"MATCH (a:Person {{ID: $person1Id}})"
+    chain = "(a:Person {ID: $person1Id})"
     for i in range(length):
-        match += f"-[:knows]-({nodes[i + 1]}" + ("", ":Person")[i < length - 1] + ")"
-    match += f" WHERE {nodes[-1]}.ID = $person2Id"
-    # intermediate nodes must be distinct people (simple paths only)
+        nxt = nodes[i + 1]
+        # intermediate nodes are plain :Person; endpoint carries the ID filter
+        if i == length - 1:
+            chain += f"-[:knows]-({nxt}:Person {{ID: $person2Id}})"
+        else:
+            chain += f"-[:knows]-({nxt}:Person)"
+    conds = []
     if length > 1:
-        mids = nodes[1:-1] + ["a"]
-        conds = [f"{m1}.ID <> {m2}.ID" for i, m1 in enumerate(mids) for m2 in (["b"] + mids[i + 1 :])]
-        match += " AND " + " AND ".join(conds)
-    ret_ids = ", ".join(f"{n}.ID AS id{i}" for i, n in enumerate(nodes))
-    paths = _get(conn, f"{match} RETURN {ret_ids};", {"person1Id": x, "person2Id": y, "dummy": 0})
+        mids = nodes[1:-1]
+        for m in mids:
+            conds.append(f"{m}.ID <> a.ID AND {m}.ID <> b.ID")
+        for i, m1 in enumerate(mids):
+            for m2 in mids[i + 1:]:
+                conds.append(f"{m1}.ID <> {m2}.ID")
+    match = f"MATCH {chain}"
+    if conds:
+        match += " WHERE " + " AND ".join(conds)
 
-    # --- step 3: weight each path (official 1.0 / 0.5 weights) ------------------
-    weighted = []
-    for path in paths:
-        w1 = w2 = 0
-        for i in range(length):
-            a, b = path[i], path[i + 1]
-            p1, c1 = _count_weighted_exchanges(conn, a, b)
-            p2, c2 = _count_weighted_exchanges(conn, b, a)
-            w1 += p1 + p2
-            w2 += c1 + c2
-        weighted.append((w1 + 0.5 * w2, list(path)))
-    weighted.sort(key=lambda t: -t[0])
-    print(f"Query 14: {len(weighted)} shortest path(s) of length {length}:")
-    for w, path in weighted:
-        print(f"  pathWeight={w}  personIdsInPath={path}")
-    return weighted
+    optionals = []
+    counts = []
+    for i in range(length):
+        u, v = nodes[i], nodes[i + 1]
+        optionals.append(
+            f"OPTIONAL MATCH (cpa{i}:Comment)-[:commentHasCreator]->({u}),"
+            f" (cpa{i})-[:replyOfPost]->(ppa{i}:Post)-[:postHasCreator]->({v})"
+        )
+        optionals.append(
+            f"OPTIONAL MATCH (cpb{i}:Comment)-[:commentHasCreator]->({v}),"
+            f" (cpb{i})-[:replyOfPost]->(ppb{i}:Post)-[:postHasCreator]->({u})"
+        )
+        optionals.append(
+            f"OPTIONAL MATCH (cca{i}:Comment)-[:commentHasCreator]->({u}),"
+            f" (cca{i})-[:replyOfComment]->(pca{i}:Comment)-[:commentHasCreator]->({v})"
+        )
+        optionals.append(
+            f"OPTIONAL MATCH (ccb{i}:Comment)-[:commentHasCreator]->({v}),"
+            f" (ccb{i})-[:replyOfComment]->(pcb{i}:Comment)-[:commentHasCreator]->({u})"
+        )
+        counts.append(f"COUNT(DISTINCT cpa{i}) + COUNT(DISTINCT cpb{i})")
+        counts.append(f"0.5 * (COUNT(DISTINCT cca{i}) + COUNT(DISTINCT ccb{i}))")
+    path_ids = "[" + ", ".join(f"{n}.ID" for n in nodes) + "]"
+    weight = " + ".join(counts) if counts else "0.0"
+    query = (
+        f"{match}\n"
+        + "\n".join(optionals)
+        + f"\nWITH {path_ids} AS personIdsInPath, ({weight}) AS pathWeight"
+        + "\nRETURN personIdsInPath, pathWeight ORDER BY pathWeight DESC;"
+    )
+    return _execute(conn, 14, query, {"person1Id": x, "person2Id": y})
 
 
 QUERY_FUNCTIONS: dict[int, Callable[..., object]] = {
